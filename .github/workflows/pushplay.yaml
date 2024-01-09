@@ -1,59 +1,88 @@
-name: Build and Deploy to Google Play
+name: Build and Release Github
 
 on:
+  pull_request:
+    branches: [automate]
+    
   push:
-    branches:
-      - automate
+    branches: [automate]
+
+  workflow_dispatch:
+    inputs:
+      version:
+        description: '1.4'
+        required: true
 
 jobs:
   build:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v2
+      - name: Checkout Repository
+        uses: actions/checkout@v4.1.0
 
-    - name: Set up JDK
-      uses: actions/setup-java@v2
-      with:
-        distribution: 'adopt'
-        java-version: '17'
+      - name: Set up JDK
+        uses: actions/setup-java@v3.13.0
+        with:
+          distribution: 'adopt'
+          java-version: '17'
 
-    - name: Give Permission
-      run: chmod +x ./gradlew
+      - name: Give Permission
+        run: chmod +x ./gradlew
+
+      - name: Build with Gradle
+        run: ./gradlew build
       
-    - name: Build with Gradle
-      run: ./gradlew clean assembleRelease bundleRelease
+      - name: Sign APKs
+        uses: r0adkll/sign-android-release@v1
+        with:
+          releaseDirectory: app/build/outputs/apk/debug/
+          signingKeyBase64: ${{ secrets.SIGNING_KEY }}
+          alias: ${{ secrets.ALIAS }}
+          keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
+          keyPassword: ${{ secrets.KEY_PASSWORD }}
 
-    - name: Archive artifacts
-      uses: actions/upload-artifact@v2
-      with:
-        name: app-artifacts
-        path: app/build/outputs/apk/release/
-    - name: Debug Output
-      run: |
-        ls -R app/build/outputs/
-        ls -R app/build/outputs/apk/release/
-        
-  deploy:
+      - name: Upload Build artifacts
+        uses: actions/upload-artifact@v3.1.3
+        with:
+          name: sample-automation
+          path: app/build/outputs/apk/debug/
+
+      - name: Debug Output
+        run: |
+          ls -R app/release/
+          ls -R app/build/outputs/apk/debug/
+
+  release:
     needs: build
     runs-on: ubuntu-latest
 
+    permissions:
+      contents: write
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v2
+      - name: Download APK from build
+        uses: actions/download-artifact@v2
+        with:
+          name: sample-automation
+          path: app/build/outputs/apk/debug/
 
-    - name: Set up JDK
-      uses: actions/setup-java@v2
-      with:
-        distribution: 'adopt'
-        java-version: '17'
+      - name: Create Release
+        id: create_release
+        uses: softprops/action-gh-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: v${{ github.event.inputs.version }}
+          name: Release Default APK from Epersepin v${{ github.event.inputs.version }}
+          draft: false
+          prerelease: false
+          files: app/build/outputs/apk/debug/sample-automation/*.apk
 
-    - name: Sign APKs
-      uses: r0adkll/sign-android-release@v1
-      with:
-        releaseDirectory: app/build/outputs/apk/release/
-        signingKeyBase64: ${{ secrets.SIGNING_KEY }}
-        alias: ${{ secrets.ALIAS }}
-        keyStorePassword: ${{ secrets.KEY_STORE_PASSWORD }}
-        keyPassword: ${{ secrets.KEY_PASSWORD }}
+      - name: Upload AAB to Google Play
+        uses: r0adkll/upload-google-play@v1
+        with:
+          serviceAccountJson: ${{ secrets.GOOGLE_PLAY_JSON_KEY }}
+          packageName: com.id.sample_automation
+          releaseFiles: app/build/outputs/apk/debug/sample-automation/*.aab
+          track: alpha # Replace with your desired track (e.g., alpha, beta, production)
+          whatsNewDirectory: distribution/
